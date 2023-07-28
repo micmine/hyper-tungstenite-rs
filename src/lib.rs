@@ -168,6 +168,41 @@ pub fn upgrade<B>(
 	Ok((response, stream))
 }
 
+pub fn upgrade_with_headers<B>(
+	mut request: impl std::borrow::BorrowMut<Request<B>>,
+	config: Option<WebSocketConfig>,
+    headers: &hyper::HeaderMap,
+) -> Result<(Response<Body>, HyperWebsocket), ProtocolError> {
+	let request = request.borrow_mut();
+
+	let key = request.headers().get("Sec-WebSocket-Key")
+		.ok_or(ProtocolError::MissingSecWebSocketKey)?;
+	if request.headers().get("Sec-WebSocket-Version").map(|v| v.as_bytes()) != Some(b"13") {
+		return Err(ProtocolError::MissingSecWebSocketVersionHeader);
+	}
+
+    let mut response = Response::builder()
+        .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+        .header(hyper::header::CONNECTION, "upgrade")
+        .header(hyper::header::UPGRADE, "websocket")
+        .header("Sec-WebSocket-Accept", &derive_accept_key(key.as_bytes()));
+
+    for (key, value) in headers.into_iter() {
+        response = response.header(key, value);
+    }
+
+    let response = response
+        .body(Body::from("switching to websocket protocol"))
+        .expect("bug: failed to build response");
+
+	let stream = HyperWebsocket {
+		inner: hyper::upgrade::on(request),
+		config,
+	};
+
+	Ok((response, stream))
+}
+
 /// Check if a request is a websocket upgrade request.
 ///
 /// If the `Upgrade` header lists multiple protocols,
